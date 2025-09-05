@@ -1,3 +1,4 @@
+# app.py
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -264,4 +265,27 @@ if st.button("Compute Benefit Illustration"):
         st.download_button("Download BI (Excel)", data=output_xl.getvalue(), file_name="bi_result.xlsx",
                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     except Exception:
-        # openpy
+        # openpyxl might not be installed in every environment — fallback to CSV only
+        pass
+
+    # If excel was evaluated also show the evaluated Output sheet as well
+    if excel_df is not None:
+        st.markdown("---")
+        st.subheader(f"Evaluated Excel Output sheet: {excel_sheet_name}")
+        st.dataframe(excel_df, use_container_width=True)
+
+else:
+    st.info("Fill inputs on the left and press **Compute Benefit Illustration**. Uploading Excel is optional.")
+
+# ------------------------
+# Notes / next steps
+# ------------------------
+st.markdown(
+    """
+### Notes & How to match Excel exactly
+- The **pure-Python** engine (`compute_benefit_illustration`) is intentionally simple and **works without Excel**.  
+  - Replace this function's math with the exact Excel formulas / schedules to match your `BI UL.xlsm`.
+- If you want exact parity and your workbook uses cell formulas (not VBA), upload the workbook — the app will attempt to evaluate it using `xlcalculator` (if available).  
+- To fully reproduce complex Excel logic, port the Excel formulas and any lookup tables into Python functions (pandas/numpy). If you share the main formula rules, I can embed them directly into `compute_benefit_illustration`.
+"""
+)
