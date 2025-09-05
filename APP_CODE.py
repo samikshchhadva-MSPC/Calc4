@@ -22,11 +22,13 @@ with col2:
 with col3:
     annual_premium = st.number_input("Annual Premium (₹)", min_value=10000, value=100000, step=1000)
 
-col4, col5 = st.columns(2)
+col4, col5, col6 = st.columns(3)
 with col4:
     policy_term = st.number_input("Policy Term (years)", min_value=10, max_value=40, value=20)
 with col5:
     ppt = st.number_input("Premium Paying Term (years)", min_value=5, max_value=40, value=20)
+with col6:
+    sum_assured = st.number_input("Sum Assured (₹)", min_value=100000, step=50000, value=1000000)
 
 if "show_bi" not in st.session_state:
     st.session_state.show_bi = False
@@ -43,32 +45,49 @@ if st.session_state.show_bi:
     - **Annual Premium:** ₹{annual_premium:,.0f}  
     - **Policy Term:** {policy_term} years  
     - **Premium Paying Term:** {ppt} years  
+    - **Sum Assured:** ₹{sum_assured:,.0f}  
     """)
 
-    # Placeholder simple calculations for demo
+    # Placeholder monthly calculation loop
     years = list(range(1, policy_term + 1))
     data = []
     fund_4, fund_8 = 0, 0
 
     for yr in years:
         prem = annual_premium if yr <= ppt else 0
-        mort_chg = 0.02 * prem   # dummy mortality charge = 2% of premium
-        other_chg = 0.03 * prem  # dummy other charge = 3% of premium
-        gst = 0.18 * (mort_chg + other_chg)  # GST 18% on charges
 
-        invest_amt = prem - (mort_chg + other_chg + gst)
-        fund_4 = (fund_4 + invest_amt) * 1.04
-        fund_8 = (fund_8 + invest_amt) * 1.08
+        # Charges
+        pac = 0
+        if yr == 1:
+            pac = 0.06 * prem
+        elif yr <= 5:
+            pac = 0.04 * prem
+        policy_admin = 0.0165 * prem if yr <= 5 else 0
+        other_chg = pac + policy_admin
 
-        surrender_4 = fund_4 * 0.75  # assume 75% surrender
-        surrender_8 = fund_8 * 0.75
-        death_ben_4 = max(fund_4, prem * 10)  # dummy min sum assured
-        death_ben_8 = max(fund_8, prem * 10)
+        mort_chg_4 = 0.001 * max(sum_assured - fund_4, 0)
+        mort_chg_8 = 0.001 * max(sum_assured - fund_8, 0)
+
+        gst_4 = 0.18 * (mort_chg_4 + other_chg)
+        gst_8 = 0.18 * (mort_chg_8 + other_chg)
+
+        # Monthly growth
+        invest_4 = prem - (other_chg + mort_chg_4 + gst_4)
+        invest_8 = prem - (other_chg + mort_chg_8 + gst_8)
+
+        fund_4 = (fund_4 + invest_4) * ((1 + 0.04) ** (1/12)) ** 12
+        fund_8 = (fund_8 + invest_8) * ((1 + 0.08) ** (1/12)) ** 12
+
+        # Benefits
+        surrender_4 = fund_4
+        surrender_8 = fund_8
+        death_ben_4 = max(surrender_4, sum_assured)
+        death_ben_8 = max(surrender_8, sum_assured)
 
         data.append([
             yr, prem,
-            mort_chg, other_chg, gst, round(fund_4,2), round(surrender_4,2), round(death_ben_4,2),
-            mort_chg, other_chg, gst, round(fund_8,2), round(surrender_8,2), round(death_ben_8,2)
+            mort_chg_4, other_chg, gst_4, round(fund_4, 2), round(surrender_4, 2), round(death_ben_4, 2),
+            mort_chg_8, other_chg, gst_8, round(fund_8, 2), round(surrender_8, 2), round(death_ben_8, 2)
         ])
 
     # Create DataFrame with 14 columns
@@ -81,9 +100,16 @@ if st.session_state.show_bi:
     ])
 
     # ---------------- Display Table ----------------
-    st.subheader("Benefit Illustration Table (Simplified 14-column)")
-    st.dataframe(
-        df.style.format("{:,.2f}")
+    st.subheader("Benefit Illustration Table (Simplified)")
+    st.dataframe(df.style.format("{:,.2f}"))
+
+    # ---------------- Download as CSV ----------------
+    csv = df.to_csv(index=False).encode("utf-8")
+    st.download_button(
+        "Download BI as CSV",
+        data=csv,
+        file_name="demo_bi.csv",
+        mime="text/csv"
     )
 
     # ---------------- Disclaimer ----------------
@@ -91,7 +117,7 @@ if st.session_state.show_bi:
     ---
     ### Important Notes:
     - This is a **demo BI** created for educational purposes, not an official illustration.  
-    - All charges, returns, and benefits shown here are dummy assumptions.  
+    - All charges, returns, and benefits shown here are **dummy assumptions** for demo.  
     - For the official Benefit Illustration, please generate it from [bi.edelweisslife.in](https://bi.edelweisslife.in).  
     """)
 else:
