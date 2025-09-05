@@ -11,10 +11,9 @@ st.markdown("""
 ---
 """)
 
-# ---------------- Policyholder inputs on top ----------------
+# ---------------- Inputs ----------------
 st.subheader("Policy / Input Parameters")
 
-# First row of inputs
 col1, col2, col3 = st.columns(3)
 with col1:
     age = st.number_input("Age of Life Assured", min_value=0, max_value=100, value=30)
@@ -23,23 +22,20 @@ with col2:
 with col3:
     annual_premium = st.number_input("Annual Premium (₹)", min_value=10000, value=100000, step=1000)
 
-# Second row of inputs
 col4, col5 = st.columns(2)
 with col4:
     policy_term = st.number_input("Policy Term (years)", min_value=10, max_value=40, value=20)
 with col5:
     ppt = st.number_input("Premium Paying Term (years)", min_value=5, max_value=40, value=20)
 
-# ---------------- Button with session state ----------------
 if "show_bi" not in st.session_state:
     st.session_state.show_bi = False
 
 if st.button("Generate BI"):
     st.session_state.show_bi = True
 
-# ---------------- Show BI only if button clicked ----------------
+# ---------------- BI Generation ----------------
 if st.session_state.show_bi:
-    # --------- Show Policyholder Details ---------
     st.subheader("Policyholder Details")
     st.write(f"""
     - **Age of Life Assured:** {age} years  
@@ -49,55 +45,53 @@ if st.session_state.show_bi:
     - **Premium Paying Term:** {ppt} years  
     """)
 
-    # --------- Simplified BI Calculation ---------
+    # Placeholder simple calculations for demo
     years = list(range(1, policy_term + 1))
-    premiums, net_invested, fund_4, fund_8 = [], [], [], []
-    fund_val_4, fund_val_8 = 0, 0
+    data = []
+    fund_4, fund_8 = 0, 0
 
-    for year in years:
-        premium = annual_premium if year <= ppt else 0
-        charge = 0.05 * premium if year <= 5 else 0  # 5% charge first 5 years
-        invest = premium - charge
-        fund_val_4 = (fund_val_4 + invest) * 1.04
-        fund_val_8 = (fund_val_8 + invest) * 1.08
+    for yr in years:
+        prem = annual_premium if yr <= ppt else 0
+        mort_chg = 0.02 * prem   # dummy mortality charge = 2% of premium
+        other_chg = 0.03 * prem  # dummy other charge = 3% of premium
+        gst = 0.18 * (mort_chg + other_chg)  # GST 18% on charges
 
-        premiums.append(premium)
-        net_invested.append(invest)
-        fund_4.append(round(fund_val_4, 2))
-        fund_8.append(round(fund_val_8, 2))
+        invest_amt = prem - (mort_chg + other_chg + gst)
+        fund_4 = (fund_4 + invest_amt) * 1.04
+        fund_8 = (fund_8 + invest_amt) * 1.08
 
-    df = pd.DataFrame({
-        "Policy Year": years,
-        "Premium Paid (₹)": premiums,
-        "Net Invested (₹)": net_invested,
-        "Fund Value @4% (₹)": fund_4,
-        "Fund Value @8% (₹)": fund_8
-    })
+        surrender_4 = fund_4 * 0.75  # assume 75% surrender
+        surrender_8 = fund_8 * 0.75
+        death_ben_4 = max(fund_4, prem * 10)  # dummy min sum assured
+        death_ben_8 = max(fund_8, prem * 10)
 
-    # --------- Display BI Table ---------
-    st.subheader("Benefit Illustration Table (Simplified)")
-    st.markdown("Values are shown at two assumed rates of return (4% and 8%) as per IRDAI guidelines.")
+        data.append([
+            yr, prem,
+            mort_chg, other_chg, gst, round(fund_4,2), round(surrender_4,2), round(death_ben_4,2),
+            mort_chg, other_chg, gst, round(fund_8,2), round(surrender_8,2), round(death_ben_8,2)
+        ])
 
+    # Create DataFrame with 14 columns
+    df = pd.DataFrame(data, columns=[
+        "Policy Year", "Annualized Premium",
+        "Mortality, Morbidity Charges (4%)", "Other Charges* (4%)", "GST (4%)",
+        "Fund @4% End of Year", "Surrender Value (4%)", "Death Benefit (4%)",
+        "Mortality, Morbidity Charges (8%)", "Other Charges* (8%)", "GST (8%)",
+        "Fund @8% End of Year", "Surrender Value (8%)", "Death Benefit (8%)"
+    ])
+
+    # ---------------- Display Table ----------------
+    st.subheader("Benefit Illustration Table (Simplified 14-column)")
     st.dataframe(
         df.style.format("{:,.2f}")
-        .set_table_styles([{'selector': 'th', 'props': [('background-color', '#f0f0f0'), ('font-weight', 'bold')]}])
     )
 
-    # --------- Summary ---------
-    st.subheader("Summary at Maturity")
-    st.write(f"""
-    - **Total Premiums Paid:** ₹{sum(premiums):,.0f}  
-    - **Fund Value @4% (Maturity):** ₹{fund_4[-1]:,.0f}  
-    - **Fund Value @8% (Maturity):** ₹{fund_8[-1]:,.0f}  
-    """)
-
-    # --------- Disclaimers ---------
+    # ---------------- Disclaimer ----------------
     st.markdown("""
     ---
     ### Important Notes:
     - This is a **demo BI** created for educational purposes, not an official illustration.  
-    - Returns shown at **4% and 8%** are not guaranteed and are as per IRDAI prescribed assumptions.  
-    - Actual fund values depend on chosen fund performance, charges, mortality, and applicable taxes.  
+    - All charges, returns, and benefits shown here are dummy assumptions.  
     - For the official Benefit Illustration, please generate it from [bi.edelweisslife.in](https://bi.edelweisslife.in).  
     """)
 else:
