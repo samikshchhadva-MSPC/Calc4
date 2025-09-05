@@ -50,7 +50,7 @@ if st.session_state.show_bi:
 
     # Placeholder monthly calculation loop
     years = list(range(1, policy_term + 1))
-    data = []
+    data_bi, data_charges = [], []
     fund_4, fund_8 = 0, 0
 
     for yr in years:
@@ -78,20 +78,51 @@ if st.session_state.show_bi:
         fund_4 = (fund_4 + invest_4) * ((1 + 0.04) ** (1/12)) ** 12
         fund_8 = (fund_8 + invest_8) * ((1 + 0.08) ** (1/12)) ** 12
 
+        # Additions (placeholders for now, we’ll refine later)
+        guaranteed_add = 0
+        loyalty_add = 0
+        booster_add = 0
+        if yr >= 6:
+            guaranteed_add = 0.0025 * fund_4  # just approx
+            loyalty_add = 0.0015 * fund_4 if ppt > 5 else 0
+        if yr % 5 == 0 and yr >= 10:
+            booster_add = 0.0275 * fund_4
+
+        fund_4 += guaranteed_add + loyalty_add + booster_add
+        fund_8 += guaranteed_add + loyalty_add + booster_add
+
         # Benefits
         surrender_4 = fund_4
         surrender_8 = fund_8
         death_ben_4 = max(surrender_4, sum_assured)
         death_ben_8 = max(surrender_8, sum_assured)
 
-        data.append([
+        # Table 1: Charges & Additions
+        data_charges.append([
+            yr, prem, pac, prem - pac, mort_chg_4, gst_4, policy_admin, other_chg,
+            guaranteed_add, loyalty_add, booster_add
+        ])
+
+        # Table 2: Main BI Table (14 cols)
+        data_bi.append([
             yr, prem,
             mort_chg_4, other_chg, gst_4, round(fund_4, 2), round(surrender_4, 2), round(death_ben_4, 2),
             mort_chg_8, other_chg, gst_8, round(fund_8, 2), round(surrender_8, 2), round(death_ben_8, 2)
         ])
 
-    # Create DataFrame with 14 columns
-    df = pd.DataFrame(data, columns=[
+    # Charges & Additions Table
+    df_charges = pd.DataFrame(data_charges, columns=[
+        "Policy Year", "Annualized Premium (AP)", "Premium Allocation Charge (PAC)",
+        "Annualized Premium - PAC", "Mortality Charge", "GST",
+        "Policy Admin. Charge", "Other Charges*", "Guaranteed Addition",
+        "Loyalty Addition", "Booster Addition"
+    ])
+
+    st.subheader("Table 1: Charges & Additions")
+    st.dataframe(df_charges.style.format("{:,.2f}"))
+
+    # BI Table (existing one)
+    df_bi = pd.DataFrame(data_bi, columns=[
         "Policy Year", "Annualized Premium",
         "Mortality, Morbidity Charges (4%)", "Other Charges* (4%)", "GST (4%)",
         "Fund @4% End of Year", "Surrender Value (4%)", "Death Benefit (4%)",
@@ -99,20 +130,13 @@ if st.session_state.show_bi:
         "Fund @8% End of Year", "Surrender Value (8%)", "Death Benefit (8%)"
     ])
 
-    # ---------------- Display Table ----------------
-    st.subheader("Benefit Illustration Table (Simplified)")
-    st.dataframe(df.style.format("{:,.2f}"))
+    st.subheader("Table 2: Benefit Illustration (Simplified)")
+    st.dataframe(df_bi.style.format("{:,.2f}"))
 
-    # ---------------- Download as CSV ----------------
-    csv = df.to_csv(index=False).encode("utf-8")
-    st.download_button(
-        "Download BI as CSV",
-        data=csv,
-        file_name="demo_bi.csv",
-        mime="text/csv"
-    )
+    # Download CSV (main BI)
+    csv = df_bi.to_csv(index=False).encode("utf-8")
+    st.download_button("Download BI as CSV", data=csv, file_name="demo_bi.csv", mime="text/csv")
 
-    # ---------------- Disclaimer ----------------
     st.markdown("""
     ---
     ### Important Notes:
