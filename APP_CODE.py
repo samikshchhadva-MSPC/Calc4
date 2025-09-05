@@ -11,19 +11,30 @@ st.markdown("""
 ---
 """)
 
-# ---------------- Policyholder inputs ----------------
-st.sidebar.header("Policy / Input Parameters")
-age = st.sidebar.number_input("Age of Life Assured", min_value=0, max_value=100, value=30)
-gender = st.sidebar.selectbox("Gender", ["Male", "Female"])
-annual_premium = st.sidebar.number_input("Annual Premium (₹)", min_value=10000, value=100000, step=1000)
-policy_term = st.sidebar.number_input("Policy Term (years)", min_value=10, max_value=40, value=20)
-ppt = st.sidebar.number_input("Premium Paying Term (years)", min_value=5, max_value=policy_term, value=policy_term)
+# ---------------- Policyholder inputs on top ----------------
+st.subheader("Policy / Input Parameters")
+
+# First row of inputs
+col1, col2, col3 = st.columns(3)
+with col1:
+    age = st.number_input("Age of Life Assured", min_value=0, max_value=100, value=30)
+with col2:
+    gender = st.selectbox("Gender", ["Male", "Female"])
+with col3:
+    annual_premium = st.number_input("Annual Premium (₹)", min_value=10000, value=100000, step=1000)
+
+# Second row of inputs
+col4, col5 = st.columns(2)
+with col4:
+    policy_term = st.number_input("Policy Term (years)", min_value=10, max_value=40, value=20)
+with col5:
+    ppt = st.number_input("Premium Paying Term (years)", min_value=5, max_value=40, value=20)
 
 # ---------------- Button with session state ----------------
 if "show_bi" not in st.session_state:
     st.session_state.show_bi = False
 
-if st.sidebar.button("Generate BI"):
+if st.button("Generate BI"):
     st.session_state.show_bi = True
 
 # ---------------- Show BI only if button clicked ----------------
@@ -90,4 +101,4 @@ if st.session_state.show_bi:
     - For the official Benefit Illustration, please generate it from [bi.edelweisslife.in](https://bi.edelweisslife.in).  
     """)
 else:
-    st.info("👈 Please fill the Policy / Input Parameters on the left and click **Generate BI** to see the illustration.")
+    st.info("👉 Please fill the Policy / Input Parameters above and click **Generate BI** to see the illustration.")
