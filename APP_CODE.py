@@ -1,131 +1,190 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
+import io
 import tempfile
 import os
-from openpyxl import load_workbook
-from openpyxl.utils import get_column_letter, coordinate_from_string, column_index_from_string
-from xlcalculator import ModelCompiler, Evaluator
 
-st.set_page_config(page_title="BI UL — Benefit Illustration (no VBA)", layout="wide")
-st.title("📋 Benefit Illustration — Streamlit (Excel formulas only, VBA ignored)")
+# Optional Excel support (only used if user uploads an .xlsm/.xlsx)
+try:
+    from openpyxl import load_workbook
+    from openpyxl.utils import get_column_letter, coordinate_from_string, column_index_from_string
+    from xlcalculator import ModelCompiler, Evaluator
+    XL_AVAILABLE = True
+except Exception:
+    XL_AVAILABLE = False
 
-# Helper: load workbook (from upload or local fallback)
-def load_workbook_from_upload(uploaded_file):
+st.set_page_config(page_title="BI UL — Pure Python Benefit Illustration", layout="wide")
+st.title("📋 Benefit Illustration — Pure Python (Excel optional)")
+
+st.markdown(
     """
-    Returns tuple (workbook, filepath).
-    If uploaded_file is None and fallback exists, returns (wb, fallback_path).
-    """
-    if uploaded_file is None:
-        fallback = "/mnt/data/BI UL.xlsm"
-        if os.path.exists(fallback):
-            wb = load_workbook(fallback, data_only=False)
-            return wb, fallback
-        return None, None
+This app runs **without** requiring the Excel workbook to be present on the running machine.
+- Use the **sidebar form** to enter policy inputs.
+- Press **Compute Benefit Illustration** to run the Python model and display the Output sheet.
+- Optionally upload your `BI UL.xlsm` to let the app evaluate the real workbook (if you'd like).
+"""
+)
+
+# ------------------------
+# Editable input schema
+# ------------------------
+# Edit this schema to add/remove input fields to match your Input sheet.
+INPUT_SCHEMA = [
+    {"key": "policyholder_name", "label": "Policyholder name", "type": "text", "default": "John Doe"},
+    {"key": "age", "label": "Age", "type": "int", "default": 35},
+    {"key": "gender", "label": "Gender", "type": "select", "options": ["Male", "Female"], "default": "Male"},
+    {"key": "sum_assured", "label": "Sum Assured (INR)", "type": "number", "default": 1000000},
+    {"key": "annual_premium", "label": "Annual Premium (INR, annual equivalent)", "type": "number", "default": 50000},
+    {"key": "policy_term", "label": "Policy Term (years)", "type": "int", "default": 10},
+    {"key": "premium_frequency", "label": "Premium Frequency", "type": "select",
+     "options": ["Annual", "Semi-Annual", "Quarterly", "Monthly"], "default": "Annual"},
+    {"key": "assumed_rate", "label": "Assumed interest rate (annual %)", "type": "number", "default": 4.0},
+    {"key": "surrender_charge_pct", "label": "Surrender charge (%)", "type": "number", "default": 30.0},
+]
+
+# ------------------------
+# Helper: render input form
+# ------------------------
+st.sidebar.header("Policy inputs")
+inputs = {}
+for fld in INPUT_SCHEMA:
+    key = fld["key"]
+    lbl = fld["label"]
+    typ = fld.get("type", "text")
+    default = fld.get("default", "")
+    if typ == "text":
+        inputs[key] = st.sidebar.text_input(lbl, value=str(default))
+    elif typ == "int":
+        inputs[key] = st.sidebar.number_input(lbl, value=int(default), step=1, format="%d")
+    elif typ == "number":
+        inputs[key] = st.sidebar.number_input(lbl, value=float(default))
+    elif typ == "select":
+        opts = fld.get("options", [])
+        inputs[key] = st.sidebar.selectbox(lbl, opts, index=opts.index(default) if default in opts else 0)
     else:
-        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(uploaded_file.name)[-1])
-        tmp.write(uploaded_file.getbuffer())
-        tmp.flush()
-        tmp.close()
-        wb = load_workbook(tmp.name, data_only=False)
-        return wb, tmp.name
+        inputs[key] = st.sidebar.text_input(lbl, value=str(default))
 
-# Extract defined names (named ranges) that point to single cells and are on the Input sheet
-def get_named_inputs_from_wb(wb, sheet_name_candidates=("Input", "INPUT", "input")):
-    inputs = {}
-    dn = wb.defined_names
-    for defn in dn.definedName:
-        name = defn.name
-        if name is None or name.startswith('_xlnm'):
-            continue
-        try:
-            destinations = list(defn.destinations)
-        except Exception:
-            continue
-        for (sname, coord) in destinations:
-            if sname in wb.sheetnames and any(sname == c for c in sheet_name_candidates):
-                # handle single cell named ranges
-                if ":" not in coord:
-                    inputs[name] = (sname, coord)
-                else:
-                    a, b = coord.split(":")
-                    if a == b:
-                        inputs[name] = (sname, a)
-                break
-    return inputs
+# Optionally upload Excel (user may still upload but not required)
+st.sidebar.markdown("---")
+uploaded_file = st.sidebar.file_uploader("Optional: upload BI UL Excel (.xlsm / .xlsx) to evaluate workbook", type=["xlsm", "xlsx"])
 
-# Fallback heuristic: assume Input sheet is key-value table with first column labels and second column default values
-def get_key_value_inputs_from_sheet(wb, sheet_name_candidates=("Input", "INPUT", "input")):
-    for candidate in sheet_name_candidates:
-        if candidate in wb.sheetnames:
-            ws = wb[candidate]
-            kv = {}
-            for r in range(1, min(200, ws.max_row) + 1):
-                key_cell = ws.cell(row=r, column=1).value
-                val_cell = ws.cell(row=r, column=2).value
-                if key_cell is None:
-                    continue
-                key = str(key_cell).strip()
-                if key == "":
-                    continue
-                kv[key] = {"sheet": candidate, "cell": f"{get_column_letter(2)}{r}", "default": val_cell}
-            return kv
-    return {}
+# ------------------------
+# Pure-Python calculation engine
+# ------------------------
+def compute_benefit_illustration(inp: dict):
+    """
+    Compute a simple Benefit Illustration using pure Python.
+    Replace/extend these calculations to match the Excel formulas exactly.
+    Returns:
+      - outputs: dict of summary outputs (numbers)
+      - proj_df: DataFrame with per-year projection (Year, PremiumPaidCum, AccumulatedValue, SurrenderValue, GuaranteedBenefit)
+    """
+    # Read inputs
+    SA = float(inp.get("sum_assured", 0.0))
+    annual_prem = float(inp.get("annual_premium", 0.0))
+    term = int(inp.get("policy_term", 0))
+    rate_pct = float(inp.get("assumed_rate", 0.0))
+    surrender_charge_pct = float(inp.get("surrender_charge_pct", 0.0))
+    freq = inp.get("premium_frequency", "Annual")
 
-# Write inputs (dict of (sheet, cell, value)) into a workbook and save to a temp file, return temp path
-def write_inputs_to_tempfile_and_save(wb, inputs_map):
-    # create temp file path
-    tmpfile = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx")
-    tmpfile.close()
-    # apply inputs_map
-    for k, v in inputs_map.items():
-        # v is (sheet, cell, value)
-        try:
-            sname, coord, val = v
-        except Exception:
-            continue
-        if sname in wb.sheetnames:
-            ws = wb[sname]
-            # write value into the target cell
-            ws[coord] = val
-    wb.save(tmpfile.name)
-    return tmpfile.name
+    # Frequency mapping if needed (we assume 'annual_prem' is annual equivalent)
+    freq_map = {"Annual": 1, "Semi-Annual": 2, "Quarterly": 4, "Monthly": 12}
+    payments_per_year = freq_map.get(freq, 1)
 
-# Evaluate all cells on Output sheet and return as dataframe + sheetname
-def evaluate_output_sheet(tempfile_path, output_sheet_name_guess=("Output", "OUTPUT", "output")):
+    r = rate_pct / 100.0
+
+    # For a simple accumulation model assume premiums are paid at the start of each year and earn interest
+    accumulated = 0.0
+    projection = []
+    total_prem_paid = 0.0
+    for y in range(1, term + 1):
+        # Add premium for year y (annual equivalent)
+        premium_paid_this_year = annual_prem
+        total_prem_paid += premium_paid_this_year
+
+        # premiums paid at start of year: they compound for (term - y + 0) years until maturity
+        # We'll compute accumulated as previous * (1+r) + premium_paid_this_year * (1+r)**(term - y)
+        # Simpler approach: accumulate year by year:
+        accumulated = (accumulated + premium_paid_this_year) * (1 + r)
+
+        # For display, compute surrender value after applying surrender charge percentage
+        surrender_value = accumulated * (1.0 - surrender_charge_pct / 100.0)
+
+        # GuaranteedBenefit (example): show sum assured (you can plug more accurate guaranteed schedules)
+        guaranteed_benefit = SA
+
+        projection.append({
+            "Year": y,
+            "PremiumPaidThisYear": round(premium_paid_this_year, 2),
+            "TotalPremiumsPaidCum": round(total_prem_paid, 2),
+            "AccumulatedValue": round(accumulated, 2),
+            "SurrenderValue": round(surrender_value, 2),
+            "GuaranteedBenefit": round(guaranteed_benefit, 2),
+        })
+
+    # Maturity value = accumulated at end of policy term (this simple model)
+    maturity_value = accumulated
+
+    # Death benefit (simple): sum assured; you can change to SA + accumulated etc.
+    death_benefit = SA
+
+    outputs = {
+        "SumAssured": SA,
+        "AnnualPremium": annual_prem,
+        "PolicyTermYears": term,
+        "TotalPremiumsPaid": round(total_prem_paid, 2),
+        "MaturityValue": round(maturity_value, 2),
+        "DeathBenefit": round(death_benefit, 2),
+        "SurrenderValueAtMaturity": round(projection[-1]["SurrenderValue"] if projection else 0.0, 2),
+        "AssumedRatePct": rate_pct,
+        "SurrenderChargePct": surrender_charge_pct,
+    }
+
+    proj_df = pd.DataFrame(projection)
+    return outputs, proj_df
+
+# ------------------------
+# Excel-assisted evaluator (optional)
+# ------------------------
+def evaluate_workbook_with_xlcalculator(filelike):
+    """
+    If xlcalculator is available and the user uploaded a workbook, try to:
+    - detect named inputs on the Input sheet and present them (not used here),
+    - evaluate the 'Output' sheet cells and return them as a DataFrame.
+    This is optional and will only run if XL_AVAILABLE==True.
+    """
+    if not XL_AVAILABLE:
+        raise RuntimeError("Excel evaluation libraries (openpyxl / xlcalculator) are not installed.")
+    # Save upload to a temp file if filelike is an uploaded file-like object
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(getattr(filelike, "name", "uploaded.xlsx"))[-1])
+    tmp.write(filelike.getbuffer())
+    tmp.flush()
+    tmp.close()
+    tmp_path = tmp.name
+
+    # compile
     compiler = ModelCompiler()
-    model = compiler.read_and_parse_archive(tempfile_path)
+    model = compiler.read_and_parse_archive(tmp_path)
     evaluator = Evaluator(model)
 
-    # choose sheet name
+    # pick 'Output' sheet (common names)
+    possible_names = ["Output", "OUTPUT", "output"]
     sheetname = None
-    # model.workbook.sheets is a dict-like (keys are sheet names) in xlcalculator models
-    try:
-        sheet_keys = list(model.workbook.sheets.keys())
-    except Exception:
-        # fallback to reading with openpyxl
-        wb_temp = load_workbook(tempfile_path, data_only=False)
-        sheet_keys = wb_temp.sheetnames
-
-    for s in output_sheet_name_guess:
-        if s in sheet_keys:
-            sheetname = s
+    for n in possible_names:
+        if n in model.workbook.sheets:
+            sheetname = n
             break
     if sheetname is None:
-        for s in sheet_keys:
-            if s.lower() == "output":
-                sheetname = s
-                break
-    if sheetname is None:
-        # try any sheet that contains 'output' in name
-        for s in sheet_keys:
+        # fallback to any sheet containing 'output'
+        for s in model.workbook.sheets:
             if "output" in s.lower():
                 sheetname = s
                 break
     if sheetname is None:
-        sheetname = sheet_keys[-1]
+        sheetname = list(model.workbook.sheets.keys())[-1]
 
-    # Get dimensions via openpyxl
-    wb2 = load_workbook(tempfile_path, data_only=False)
+    wb2 = load_workbook(tmp_path, data_only=False)
     ws2 = wb2[sheetname]
 
     rows = []
@@ -144,8 +203,6 @@ def evaluate_output_sheet(tempfile_path, output_sheet_name_guess=("Output", "OUT
                 any_nonempty = True
         if any_nonempty:
             rows.append(row_vals)
-
-    # create DataFrame
     if rows:
         max_cols = max(len(r) for r in rows)
         df = pd.DataFrame([r + [None] * (max_cols - len(r)) for r in rows])
@@ -153,126 +210,58 @@ def evaluate_output_sheet(tempfile_path, output_sheet_name_guess=("Output", "OUT
         df = pd.DataFrame()
     return df, sheetname
 
-# Safely get a cell's current value from workbook
-def get_cell_value(wb, sheet, coord):
-    try:
-        col, row = coordinate_from_string(coord)
-        col_idx = column_index_from_string(col)
-        return wb[sheet].cell(row=row, column=col_idx).value
-    except Exception:
+# ------------------------
+# Compute on button press
+# ------------------------
+if st.button("Compute Benefit Illustration"):
+    # First, try Excel evaluation if file uploaded and XL_AVAILABLE
+    excel_df = None
+    excel_sheet_name = None
+    if uploaded_file is not None and XL_AVAILABLE:
         try:
-            return wb[sheet][coord].value
-        except Exception:
-            return None
-
-# UI: Upload / load workbook
-uploaded_file = st.file_uploader("Upload BI UL Excel file (.xlsm or .xlsx). If none uploaded the app will try `/mnt/data/BI UL.xlsm`.", type=["xlsm", "xlsx", "xls"])
-
-wb_obj = None
-orig_tmp_path = None
-wb_obj, orig_tmp_path = load_workbook_from_upload(uploaded_file)
-
-if wb_obj is None:
-    st.info("Please upload your BI UL.xlsm file to continue or place it at /mnt/data/BI UL.xlsm.")
-    st.stop()
-
-# Detect named inputs
-named_inputs = get_named_inputs_from_wb(wb_obj)
-use_named = len(named_inputs) > 0
-
-st.sidebar.header("Input mode")
-if use_named:
-    st.sidebar.success(f"Detected {len(named_inputs)} named input(s) on Input sheet. Using named inputs.")
-else:
-    st.sidebar.warning("No named inputs detected. Falling back to key-value heuristic from the Input sheet.")
-
-inputs_map_for_writing = {}
-
-if use_named:
-    st.sidebar.subheader("Named inputs (edit values)")
-    for name, (sheet, coord) in named_inputs.items():
-        val = get_cell_value(wb_obj, sheet, coord)
-        if isinstance(val, (int, float)) or (isinstance(val, str) and str(val).replace('.', '', 1).isdigit()):
-            default_val = float(val) if val not in (None, "") else 0.0
-            new_val = st.sidebar.number_input(f"{name} ({sheet}!{coord})", value=default_val)
-        else:
-            new_val = st.sidebar.text_input(f"{name} ({sheet}!{coord})", value=str(val) if val is not None else "")
-        inputs_map_for_writing[name] = (sheet, coord, new_val)
-else:
-    kv = get_key_value_inputs_from_sheet(wb_obj)
-    if not kv:
-        st.sidebar.subheader("Manual inputs (no auto-detected Input sheet)")
-        manual_count = st.sidebar.number_input("How many manual inputs to add?", min_value=0, max_value=50, value=0)
-        for i in range(manual_count):
-            label = st.sidebar.text_input(f"Label #{i+1}", value=f"Input_{i+1}")
-            sheet_name = st.sidebar.text_input(f"Sheet for {label}", value="Input")
-            cell = st.sidebar.text_input(f"Cell for {label}", value=f"A{i+2}")
-            value = st.sidebar.text_input(f"Value for {label}", value="")
-            if label:
-                inputs_map_for_writing[label] = (sheet_name, cell, value)
-    else:
-        st.sidebar.subheader("Detected Input key→value pairs (edit defaults)")
-        for key, meta in kv.items():
-            default = meta.get("default", "")
-            if isinstance(default, (int, float)):
-                new_val = st.sidebar.number_input(f"{key} ({meta['sheet']}!{meta['cell']})", value=float(default))
-            else:
-                # allow numeric-like defaults
-                try:
-                    num = float(default) if default not in (None, "") and str(default).replace('.', '', 1).isdigit() else None
-                except Exception:
-                    num = None
-                if num is not None:
-                    new_val = st.sidebar.number_input(f"{key} ({meta['sheet']}!{meta['cell']})", value=num)
-                else:
-                    new_val = st.sidebar.text_input(f"{key} ({meta['sheet']}!{meta['cell']})", value=str(default) if default is not None else "")
-            inputs_map_for_writing[key] = (meta["sheet"], meta["cell"], new_val)
-
-# Confirm & compute button
-if st.sidebar.button("Compute Benefit Illustration"):
-    with st.spinner("Writing inputs and evaluating formulas..."):
-        try:
-            # reload workbook fresh from orig_tmp_path where possible to avoid overwriting original
-            if orig_tmp_path and os.path.exists(orig_tmp_path):
-                wb_to_write = load_workbook(orig_tmp_path, data_only=False)
-            else:
-                wb_to_write = wb_obj
-            temp_path = write_inputs_to_tempfile_and_save(wb_to_write, inputs_map_for_writing)
-            df_out, out_sheet = evaluate_output_sheet(temp_path)
+            with st.spinner("Evaluating uploaded workbook (xlcalculator)..."):
+                excel_df, excel_sheet_name = evaluate_workbook_with_xlcalculator(uploaded_file)
+            st.success(f"Excel workbook evaluated (sheet: {excel_sheet_name}). Displaying that Output below.")
+            st.subheader("Output sheet (evaluated from uploaded workbook)")
+            st.dataframe(excel_df, use_container_width=True)
         except Exception as e:
-            st.error(f"Computation failed: {e}")
-            st.stop()
+            st.warning(f"Excel evaluation failed (falling back to Python model). Error: {e}")
 
-    st.success("Computation finished — showing Benefit Illustration outputs.")
-    st.header("Final Benefit Illustration — Output sheet")
-    st.subheader(f"Output sheet used: {out_sheet}")
-    st.dataframe(df_out, use_container_width=True)
+    # Always run the pure-Python model so app works without Excel
+    with st.spinner("Running pure-Python Benefit Illustration model..."):
+        outputs, proj_df = compute_benefit_illustration(inputs)
 
-    if not df_out.empty:
-        try:
-            candidate = df_out.iloc[:, :2].dropna(how="all")
-            candidate.columns = ["Label", "Value"] if candidate.shape[1] >= 2 else ["Label"]
-            if "Value" in candidate.columns:
-                st.subheader("Key outputs (interpreted from leftmost two columns)")
-                st.table(candidate.head(50).set_index("Label"))
-        except Exception:
-            pass
+    st.success("Pure-Python Benefit Illustration computed.")
 
-    # allow download of the temp workbook with inputs written
+    # Summary metrics
+    st.header("Final Benefit Illustration — Summary")
+    cols = st.columns(4)
+    cols[0].metric("Sum Assured", f"₹ {outputs['SumAssured']:,.2f}")
+    cols[1].metric("Annual Premium", f"₹ {outputs['AnnualPremium']:,.2f}")
+    cols[2].metric("Policy Term (yrs)", f"{outputs['PolicyTermYears']}")
+    cols[3].metric("Total Premiums Paid", f"₹ {outputs['TotalPremiumsPaid']:,.2f}")
+
+    cols2 = st.columns(3)
+    cols2[0].metric("Maturity Value (assumed)", f"₹ {outputs['MaturityValue']:,.2f}")
+    cols2[1].metric("Death Benefit (example)", f"₹ {outputs['DeathBenefit']:,.2f}")
+    cols2[2].metric("Surrender Value at maturity (assumed)", f"₹ {outputs['SurrenderValueAtMaturity']:,.2f}")
+
+    # Projection table (year-by-year)
+    st.subheader("Projection — year-by-year")
+    st.dataframe(proj_df, use_container_width=True)
+
+    # Download outputs (CSV & Excel)
+    csv_buf = proj_df.to_csv(index=False).encode("utf-8")
+    st.download_button("Download projection (CSV)", data=csv_buf, file_name="bi_projection.csv", mime="text/csv")
+
+    # Excel download for projection
     try:
-        with open(temp_path, "rb") as f:
-            st.download_button("Download workbook with inputs (temp file)", data=f, file_name="BI_UL_with_inputs.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        output_xl = io.BytesIO()
+        with pd.ExcelWriter(output_xl, engine="openpyxl") as writer:
+            proj_df.to_excel(writer, index=False, sheet_name="Projection")
+            summary_df = pd.DataFrame(list(outputs.items()), columns=["Metric", "Value"])
+            summary_df.to_excel(writer, index=False, sheet_name="Summary")
+        st.download_button("Download BI (Excel)", data=output_xl.getvalue(), file_name="bi_result.xlsx",
+                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     except Exception:
-        pass
-else:
-    st.sidebar.write("Press **Compute Benefit Illustration** to run formulas and show the Output sheet.")
-
-st.markdown(
-    """
-    **Notes**
-    - Fixes included for import typo and improved robustness.
-    - If you still hit errors, please paste the stack trace here and I'll fix the next issue.
-    - Install required packages:
-      pip install streamlit openpyxl pandas xlcalculator
-    """
-)
+        # openpy
